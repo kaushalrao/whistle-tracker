@@ -8,6 +8,11 @@ import {
   Minus,
   Plus,
   Flame,
+  Bell,
+  BellOff,
+  Mic,
+  MicOff,
+  AlertCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Toaster, toast } from "sonner";
@@ -25,31 +30,89 @@ export default function WhistleTracker() {
   const [currentCount, setCurrentCount] = useState(0);
   const [isListening, setIsListening] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
+  const [isAlarmActive, setIsAlarmActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Refs
   const recognizerRef = useRef<any>(null);
   const wakeLockRef = useRef<any>(null);
   const lastDetectionTimeRef = useRef<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
-  // Audio Feedack (Ding)
-  const playDing = () => {
-    if (typeof window === "undefined") return;
+  // Audio Feedack (Rhythmic Alarm and Speech)
+  const playCompletionSound = useCallback(() => {
+    if (typeof window === "undefined" || !isAlarmActive) return;
+    
+    // Close previous context if exists
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+    }
+
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
+    audioContextRef.current = audioContext;
+    
+    const playBeep = (startTime: number) => {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
 
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
+      oscillator.type = "square"; // More "alarm-like"
+      oscillator.frequency.setValueAtTime(880, startTime); 
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
 
-    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-    gainNode.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + 0.1);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1);
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+      gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.2);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.25);
 
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + 1);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + 0.25);
+    };
+
+    // Play 3 beeps
+    const now = audioContext.currentTime;
+    playBeep(now);
+    playBeep(now + 0.4);
+    playBeep(now + 0.8);
+
+    // Loop logic: play again after 2 seconds if alarm is still active
+    const timeoutId = setTimeout(() => {
+      if (isAlarmActive) playCompletionSound();
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [isAlarmActive]);
+
+  const speakCompletion = () => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance("Cooking complete");
+      utterance.rate = 0.9;
+      utterance.pitch = 1.1;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  // Alarm Control
+  useEffect(() => {
+    if (isAlarmActive) {
+      playCompletionSound();
+      const speechInterval = setInterval(speakCompletion, 5000);
+      return () => clearInterval(speechInterval);
+    } else {
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => { });
+        audioContextRef.current = null;
+      }
+      if (typeof window !== "undefined") {
+        window.speechSynthesis.cancel();
+      }
+    }
+  }, [isAlarmActive, playCompletionSound]);
+
+  const stopAlarm = () => {
+    setIsAlarmActive(false);
+    toast.success("Alarm stopped.");
   };
 
   // Screen Wake Lock
@@ -82,7 +145,7 @@ export default function WhistleTracker() {
   // Completion Handler
   const handleCompletion = useCallback(() => {
     stopListening();
-    playDing();
+    setIsAlarmActive(true);
 
     if (typeof window !== "undefined" && Notification.permission === "granted") {
       new Notification("Cooker Companion", {
@@ -293,31 +356,41 @@ export default function WhistleTracker() {
       </main>
 
       {/* Footer / Action */}
-      <footer className="z-10 w-full max-w-md pb-8">
-        <button
-          onClick={isListening ? stopListening : startListening}
-          disabled={isModelLoading}
-          className={cn(
-            "w-full py-6 rounded-[2.5rem] font-bold text-xl flex items-center justify-center gap-3 transition-all active:scale-95 shadow-2xl",
-            isListening
-              ? "bg-slate-50 text-slate-950 hover:bg-slate-200"
-              : "bg-orange-500 text-white hover:bg-orange-600 shadow-orange-500/20"
-          )}
-        >
-          {isModelLoading ? (
-            <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          ) : isListening ? (
-            <>
-              <Square className="fill-current w-5 h-5" />
-              Stop Cooking
-            </>
-          ) : (
-            <>
-              <Play className="fill-current w-5 h-5 ml-1" />
-              Start Cooking
-            </>
-          )}
-        </button>
+      <footer className="z-10 w-full max-w-md pb-8 flex flex-col gap-4">
+        {isAlarmActive ? (
+          <button
+            onClick={stopAlarm}
+            className="w-full py-6 rounded-[2.5rem] font-bold text-xl flex items-center justify-center gap-3 transition-all active:scale-95 shadow-2xl bg-red-500 text-white hover:bg-red-600 shadow-red-500/20 animate-bounce"
+          >
+            <BellOff className="w-6 h-6" />
+            Stop Alarm
+          </button>
+        ) : (
+          <button
+            onClick={isListening ? stopListening : startListening}
+            disabled={isModelLoading}
+            className={cn(
+              "w-full py-6 rounded-[2.5rem] font-bold text-xl flex items-center justify-center gap-3 transition-all active:scale-95 shadow-2xl",
+              isListening
+                ? "bg-slate-50 text-slate-950 hover:bg-slate-200"
+                : "bg-orange-500 text-white hover:bg-orange-600 shadow-orange-500/20"
+            )}
+          >
+            {isModelLoading ? (
+              <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            ) : isListening ? (
+              <>
+                <Square className="fill-current w-5 h-5" />
+                Stop Cooking
+              </>
+            ) : (
+              <>
+                <Play className="fill-current w-5 h-5 ml-1" />
+                Start Cooking
+              </>
+            )}
+          </button>
+        )}
 
         <div className="mt-8 flex justify-center gap-8 text-slate-500">
           <div className={cn("flex items-center gap-2 transition-colors", isListening ? "text-orange-500" : "")}>
