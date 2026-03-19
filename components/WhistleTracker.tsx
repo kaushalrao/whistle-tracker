@@ -38,10 +38,11 @@ export default function WhistleTracker() {
   const wakeLockRef = useRef<any>(null);
   const lastDetectionTimeRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const alarmTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Audio Feedack (Rhythmic Alarm and Speech)
-  const playCompletionSound = useCallback(() => {
-    if (typeof window === "undefined" || !isAlarmActive) return;
+  const playAlarmBeeps = useCallback(() => {
+    if (typeof window === "undefined") return;
     
     // Close previous context if exists
     if (audioContextRef.current) {
@@ -55,7 +56,7 @@ export default function WhistleTracker() {
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
 
-      oscillator.type = "square"; // More "alarm-like"
+      oscillator.type = "square";
       oscillator.frequency.setValueAtTime(880, startTime); 
       
       oscillator.connect(gainNode);
@@ -70,19 +71,11 @@ export default function WhistleTracker() {
       oscillator.stop(startTime + 0.25);
     };
 
-    // Play 3 beeps
     const now = audioContext.currentTime;
     playBeep(now);
     playBeep(now + 0.4);
     playBeep(now + 0.8);
-
-    // Loop logic: play again after 2 seconds if alarm is still active
-    const timeoutId = setTimeout(() => {
-      if (isAlarmActive) playCompletionSound();
-    }, 2000);
-
-    return () => clearTimeout(timeoutId);
-  }, [isAlarmActive]);
+  }, []);
 
   const speakCompletion = () => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -93,22 +86,32 @@ export default function WhistleTracker() {
     }
   };
 
-  // Alarm Control
+  // Alarm Control Loop
   useEffect(() => {
     if (isAlarmActive) {
-      playCompletionSound();
-      const speechInterval = setInterval(speakCompletion, 5000);
-      return () => clearInterval(speechInterval);
-    } else {
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => { });
-        audioContextRef.current = null;
-      }
-      if (typeof window !== "undefined") {
-        window.speechSynthesis.cancel();
-      }
+      const runAlarm = () => {
+        playAlarmBeeps();
+        speakCompletion();
+        alarmTimeoutRef.current = setTimeout(runAlarm, 3000);
+      };
+
+      runAlarm();
+      
+      return () => {
+        if (alarmTimeoutRef.current) {
+          clearTimeout(alarmTimeoutRef.current);
+          alarmTimeoutRef.current = null;
+        }
+        if (audioContextRef.current) {
+          audioContextRef.current.close().catch(() => {});
+          audioContextRef.current = null;
+        }
+        if (typeof window !== "undefined") {
+          window.speechSynthesis.cancel();
+        }
+      };
     }
-  }, [isAlarmActive, playCompletionSound]);
+  }, [isAlarmActive, playAlarmBeeps]);
 
   const stopAlarm = () => {
     setIsAlarmActive(false);
